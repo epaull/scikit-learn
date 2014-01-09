@@ -5,6 +5,7 @@ classification and regression.
 
 from .base import BaseEnsemble
 from .forest import RandomForestClassifier
+from .forest import DeepForestClassifier
 from .forest import RandomForestRegressor
 from .forest import RandomTreesEmbedding
 from .forest import ExtraTreesClassifier
@@ -24,6 +25,7 @@ from . import partial_dependence
 
 __all__ = ["BaseEnsemble",
            "RandomForestClassifier", "RandomForestRegressor",
+           "DeepForestClassifier",
            "RandomTreesEmbedding", "ExtraTreesClassifier",
            "ExtraTreesRegressor", "BaggingClassifier",
            "BaggingRegressor", "GradientBoostingClassifier",

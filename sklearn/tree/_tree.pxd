@@ -94,6 +94,10 @@ cdef class Splitter:
                                SIZE_t* feature,
                                double* threshold) nogil
 
+    cdef void node_split_biased(self, RandomSampler sampler, SIZE_t feature_index, SIZE_t* pos, # Set to >= end if the node is a leaf
+                               SIZE_t* feature,
+                               double* threshold)
+
     cdef void node_value(self, double* dest) nogil
 
 
@@ -137,6 +141,60 @@ cdef class Tree:
     cdef void _resize(self, SIZE_t capacity=*) nogil
 
     cpdef build(self, np.ndarray X,
+                      np.ndarray y,
+                      np.ndarray sample_weight=*)
+
+    cpdef predict(self, np.ndarray[DTYPE_t, ndim=2] X)
+    cpdef apply(self, np.ndarray[DTYPE_t, ndim=2] X)
+    cpdef compute_feature_importances(self, normalize=*)
+# =============================================================================
+# Deep Tree
+# =============================================================================
+
+cdef class RandomSampler:
+    cdef void init(self, 
+            np.ndarray[DTYPE_t, ndim=2] prior,
+            SIZE_t n_features)
+
+    cdef int np_sample_list(self, SIZE_t feature_index)
+
+cdef class DeepTree:
+    # Input/Output layout
+    cdef public SIZE_t n_features        # Number of features in X
+    cdef SIZE_t* n_classes               # Number of classes in y[:, k]
+    cdef public SIZE_t n_outputs         # Number of outputs in y
+    cdef public SIZE_t max_n_classes     # max(n_classes)
+    cdef public SIZE_t value_stride      # n_outputs * max_n_classes
+
+    # Parameters
+    cdef public Splitter splitter        # Splitting algorithm
+    cdef public SIZE_t max_depth         # Max depth of the tree
+    cdef public SIZE_t min_samples_split # Minimum number of samples in an internal node
+    cdef public SIZE_t min_samples_leaf  # Minimum number of samples in a leaf
+
+    # Inner structures
+    cdef public SIZE_t node_count        # Counter for node IDs
+    cdef public SIZE_t capacity          # Capacity of tree, in terms of nodes
+    cdef SIZE_t* children_left           # children_left[i] is the left child of node i
+    cdef SIZE_t* children_right          # children_right[i] is the right child of node i
+    cdef SIZE_t* feature                 # features[i] is the feature used for splitting node i
+    cdef double* threshold               # threshold[i] is the threshold value at node i
+    cdef double* value                   # value[i * value_stride:(i+1) * value_stride] are the values contained at node i
+    cdef double* impurity                # impurity[i] is the impurity of node i (i.e., the value of the criterion)
+    cdef SIZE_t* n_node_samples          # n_node_samples[i] is the number of samples at node i
+
+    # Methods
+    cdef SIZE_t _add_node(self, SIZE_t parent,
+                                bint is_left,
+                                bint is_leaf,
+                                SIZE_t feature,
+                                double threshold,
+                                double impurity,
+                                SIZE_t n_node_samples) nogil
+    cdef void _resize(self, SIZE_t capacity=*) nogil
+
+    cpdef build(self, np.ndarray X,
+                      np.ndarray Prior,
                       np.ndarray y,
                       np.ndarray sample_weight=*)
 
