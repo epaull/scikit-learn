@@ -1010,6 +1010,122 @@ cdef class BiasedSplitter(Splitter):
 
     #cpdef setSampler(self, RandomSampler sampler):
     #    self.sampler = sampler
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold) nogil:
+        """Find the best split on node samples[start:end]."""
+        # Find the best split
+        cdef SIZE_t* samples = self.samples
+        cdef SIZE_t start = self.start
+        cdef SIZE_t end = self.end
+
+        cdef SIZE_t* features = self.features
+        cdef SIZE_t n_features = self.n_features
+
+        cdef DTYPE_t* X = self.X
+        cdef SIZE_t X_stride = self.X_stride
+        cdef SIZE_t max_features = self.max_features
+        cdef SIZE_t min_samples_leaf = self.min_samples_leaf
+        cdef UINT32_t* random_state = &self.rand_r_state
+
+        cdef double best_impurity = INFINITY
+        cdef SIZE_t best_pos = end
+        cdef SIZE_t best_feature
+        cdef double best_threshold
+
+        cdef double current_impurity
+        cdef SIZE_t current_pos
+        cdef SIZE_t current_feature
+        cdef double current_threshold
+
+        cdef SIZE_t f_idx, f_i, f_j, p, tmp
+        cdef SIZE_t visited_features = 0
+
+        cdef SIZE_t partition_start
+        cdef SIZE_t partition_end
+
+        for f_idx from 0 <= f_idx < n_features:
+            # Draw a feature at random
+            f_i = n_features - f_idx - 1
+            f_j = rand_int(n_features - f_idx, random_state)
+
+            tmp = features[f_i]
+            features[f_i] = features[f_j]
+            features[f_j] = tmp
+
+            current_feature = features[f_i]
+
+            # Sort samples along that feature
+            sort(X, X_stride, current_feature, samples+start, end-start)
+
+            # Evaluate all splits
+            self.criterion.reset()
+            p = start
+
+            while p < end:
+                while ((p + 1 < end) and
+                       (X[X_stride * samples[p + 1] + current_feature] <=
+                        X[X_stride * samples[p] + current_feature] + 1e-7)):
+                    p += 1
+
+                # (p + 1 >= end) or (X[samples[p + 1], current_feature] >
+                #                    X[samples[p], current_feature])
+                p += 1
+                # (p >= end) or (X[samples[p], current_feature] >
+                #                X[samples[p - 1], current_feature])
+
+                if p < end:
+                    current_pos = p
+
+                    # Reject if min_samples_leaf is not guaranteed
+                    if (((current_pos - start) < min_samples_leaf) or
+                        ((end - current_pos) < min_samples_leaf)):
+                       continue
+
+                    self.criterion.update(current_pos)
+                    current_impurity = self.criterion.children_impurity()
+
+                    if current_impurity < (best_impurity - 1e-7):
+                        best_impurity = current_impurity
+                        best_pos = current_pos
+                        best_feature = current_feature
+
+                        current_threshold = (X[X_stride * samples[p - 1] + current_feature] +
+                                             X[X_stride * samples[p] + current_feature]) / 2.0
+
+                        if current_threshold == X[X_stride * samples[p] + current_feature]:
+                            current_threshold = X[X_stride * samples[p - 1] + current_feature]
+
+                        best_threshold = current_threshold
+
+            if best_pos == end: # No valid split was ever found
+                continue
+
+            # Count one more visited feature
+            visited_features += 1
+
+            if visited_features >= max_features:
+                break
+
+        # Reorganize into samples[start:best_pos] + samples[best_pos:end]
+        if best_pos < end:
+            partition_start = start
+            partition_end = end
+            p = start
+
+            while p < partition_end:
+                if X[X_stride * samples[p] + best_feature] <= best_threshold:
+                    p += 1
+
+                else:
+                    partition_end -= 1
+
+                    tmp = samples[partition_end]
+                    samples[partition_end] = samples[p]
+                    samples[p] = tmp
+
+        # Return values
+        pos[0] = best_pos
+        feature[0] = best_feature
+        threshold[0] = best_threshold
 
     cdef void node_split_biased(self, RandomSampler sampler, SIZE_t feature_index, SIZE_t* pos, SIZE_t* feature, double* threshold):
         """Find the best split on node samples[start:end]."""
@@ -1046,7 +1162,9 @@ cdef class BiasedSplitter(Splitter):
         for f_idx from 0 <= f_idx < n_features:
             # Draw a feature at random
             f_i = n_features - f_idx - 1
-            #f_j = sampler.np_sample_list(feature_index)
+            #f_j = rand_int(n_features - f_idx, random_state)
+            f_j = sampler.np_sample_list(feature_index)
+            print <int>f_j
 
             tmp = features[f_i]
             features[f_i] = features[f_j]
@@ -1880,7 +1998,6 @@ cdef class Tree:
 
                 node_id = self._add_node(parent, is_left, is_leaf, feature,
                                          threshold, impurity, n_node_samples)
-
                 if is_leaf:
                     # Don't store value for internal nodes
                     splitter.node_value(self.value + node_id * self.value_stride)
@@ -2365,7 +2482,7 @@ cdef class DeepTree:
             sample_weight_ptr = <DOUBLE_t*> sample_weight.data
 
         # create random sampler object here
-        cpdef RandomSampler sampler = RandomSampler(Prior, self.n_features)
+        cdef RandomSampler sampler = RandomSampler(Prior, self.n_features)
         
         # Initial capacity
         cdef int init_capacity
@@ -2406,6 +2523,8 @@ cdef class DeepTree:
         cdef double impurity
         cdef bint is_leaf
 
+        cdef int prev_feature = -1
+
         cdef SIZE_t node_id
 
         #with nogil:
@@ -2430,12 +2549,18 @@ cdef class DeepTree:
                 # Evan - if no parent, this is the top node, use a random
                 # uniform split to get top node
                 # TODO: map feature to internal feature number(ID)
-                splitter.node_split_biased(sampler, node_id, &pos, &feature, &threshold)
+                if prev_feature < 1: 
+                    splitter.node_split(&pos, &feature, &threshold)
+                else:
+                    splitter.node_split_biased(sampler, parent, &pos, &feature, &threshold)
                 is_leaf = is_leaf or (pos >= end)
 
             node_id = self._add_node(parent, is_left, is_leaf, feature,
                                      threshold, impurity, n_node_samples)
 
+            # reset parent node, for sampling distribution
+            prev_feature = <int>feature
+            #print prev_feature
             if is_leaf:
                 # Don't store value for internal nodes
                 splitter.node_value(self.value + node_id * self.value_stride)
@@ -2607,15 +2732,15 @@ cdef class DeepTree:
 
 cdef class RandomSampler:
 
-    cdef void init(self, 
-            np.ndarray[DTYPE_t, ndim=2] prior,
+    def __cinit__(self, 
+            np.ndarray[double, ndim=2] prior,
             SIZE_t n_features):
         self.prior = prior
         self.n_features = n_features
     
     cdef int np_sample_list(self, SIZE_t feature_index):
         # update index: choose random values
-        choice = np.random.choice(self.n_features, p=self.prior[feature_index])
+        cdef int choice = np.random.choice(self.n_features, p=self.prior[feature_index])
         return choice
 
 # =============================================================================

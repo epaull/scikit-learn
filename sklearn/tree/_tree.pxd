@@ -152,9 +152,8 @@ cdef class Tree:
 # =============================================================================
 
 cdef class RandomSampler:
-    cdef void init(self, 
-            np.ndarray[DTYPE_t, ndim=2] prior,
-            SIZE_t n_features)
+    cdef np.ndarray prior 
+    cdef public SIZE_t n_features
 
     cdef int np_sample_list(self, SIZE_t feature_index)
 
